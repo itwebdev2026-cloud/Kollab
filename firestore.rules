@@ -1,0 +1,138 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function owns(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function hasRole(uid, role) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.role == role;
+    }
+
+    match /users/{uid} {
+      allow create: if owns(uid)
+        && request.resource.data.role in ['creator', 'business']
+        && request.resource.data.email == request.auth.token.email;
+      allow read: if owns(uid);
+      allow update: if owns(uid)
+        && request.resource.data.role == resource.data.role;
+      allow delete: if false;
+
+      match /following/{creatorUid} {
+        allow read, delete: if owns(uid);
+        allow create: if owns(uid)
+          && creatorUid != uid
+          && exists(
+            /databases/$(database)/documents/creators/$(creatorUid)
+          );
+        allow update: if false;
+      }
+    }
+
+    match /creators/{uid} {
+      allow read: if signedIn();
+      allow create: if owns(uid)
+        && hasRole(uid, 'creator')
+        && request.resource.data.verified == false
+        && request.resource.data.rating == 0;
+      allow update: if owns(uid)
+        && hasRole(uid, 'creator')
+        && request.resource.data.verified == resource.data.verified
+        && request.resource.data.rating == resource.data.rating;
+      allow delete: if false;
+    }
+
+    match /businesses/{uid} {
+      allow read: if owns(uid) && hasRole(uid, 'business');
+      allow create, update: if owns(uid) && hasRole(uid, 'business');
+      allow delete: if false;
+    }
+
+    match /conversations/{conversationId} {
+      function isParticipant() {
+        return signedIn()
+          && request.auth.uid in resource.data.participantIds;
+      }
+
+      function canStartConversation() {
+        return signedIn()
+          && !exists(
+            /databases/$(database)/documents/conversations/$(conversationId)
+          )
+          && request.auth.uid in conversationId.split('__');
+      }
+
+      allow get: if isParticipant() || canStartConversation();
+      allow list: if isParticipant();
+      allow create: if signedIn()
+        && request.resource.data.participantIds is list
+        && request.resource.data.participantIds.size() == 2
+        && request.auth.uid in request.resource.data.participantIds;
+      allow update: if isParticipant()
+        && request.resource.data.participantIds == resource.data.participantIds
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastMessage', 'lastMessageAt', 'updatedAt', 'participantNames',
+          'unreadCounts', 'lastReadAt', 'typingUsers'
+        ]);
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        function isConversationParticipant() {
+          return signedIn()
+            && request.auth.uid in get(
+              /databases/$(database)/documents/conversations/$(conversationId)
+            ).data.participantIds;
+        }
+
+        allow get, list: if isConversationParticipant();
+        allow create: if isConversationParticipant()
+          && request.resource.data.keys().hasOnly([
+            'senderId', 'text', 'createdAt', 'photoData', 'forwarded',
+            'replyTo', 'reactions', 'readBy'
+          ])
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 4000
+          && (request.resource.data.text.size() > 0
+            || request.resource.data.photoData is string)
+          && (!('photoData' in request.resource.data)
+            || request.resource.data.photoData is string
+              && request.resource.data.photoData.size() <= 870400)
+          && (!('forwarded' in request.resource.data)
+            || request.resource.data.forwarded is bool)
+          && (!('replyTo' in request.resource.data)
+            || request.resource.data.replyTo is string
+              && request.resource.data.replyTo.size() <= 4000)
+          && (!('reactions' in request.resource.data)
+            || request.resource.data.reactions is map)
+          && request.resource.data.readBy is map
+          && request.resource.data.readBy.keys().hasOnly([request.auth.uid])
+          && request.resource.data.readBy[request.auth.uid] == true
+          && request.resource.data.createdAt is timestamp;
+        allow update: if isConversationParticipant()
+          && ((request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['reactions'])
+              && request.resource.data.reactions is map
+              && request.resource.data.reactions.diff(resource.data.reactions)
+                .affectedKeys().hasOnly([request.auth.uid]))
+            || (request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['readBy'])
+              && request.resource.data.readBy is map
+              && (!('readBy' in resource.data)
+                || request.resource.data.readBy.diff(resource.data.readBy)
+                  .affectedKeys().hasOnly([request.auth.uid]))
+              && request.resource.data.readBy[request.auth.uid] == true)
+            || (request.auth.uid == resource.data.senderId
+              && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['deleted', 'text', 'photoData'])
+              && request.resource.data.deleted is bool));
+        allow delete: if false;
+      }
+    }
+  }
+}

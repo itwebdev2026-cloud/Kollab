@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../core/brand.dart';
 import '../main.dart';
@@ -16,9 +18,40 @@ class _SplashPageState extends State<SplashPage> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(milliseconds: 1800), () {
-      if (mounted) _go(context, const OnboardingPage());
-    });
+    _openInitialPage();
+  }
+
+  Future<void> _openInitialPage() async {
+    await Future.delayed(const Duration(milliseconds: 1800));
+    if (!mounted) return;
+
+    if (!useFirebase) {
+      _go(context, const OnboardingPage());
+      return;
+    }
+
+    final user = await FirebaseAuth.instance.authStateChanges().first;
+    if (!mounted) return;
+    if (user == null) {
+      _go(context, const OnboardingPage());
+      return;
+    }
+
+    try {
+      final account = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      role.value = switch (account.data()?['role']) {
+        'creator' => Role.creator,
+        'business' => Role.business,
+        _ => null,
+      };
+    } catch (_) {
+      role.value = null;
+    }
+
+    if (mounted) _go(context, const Shell());
   }
 
   @override
@@ -51,11 +84,11 @@ class _OnboardingPageState extends State<OnboardingPage> {
   static const slides = [
     ('Discover creators.',
         'Find talented creators based on your niche, location, audience and content style.',
-        Icons.search),
+      Icons.search, false),
     ('Find your perfect match.',
-        'Discover creators who match your campaign goals.', Icons.auto_awesome),
+      'Discover creators who match your campaign goals.', Icons.auto_awesome, false),
     ('Collaborate with confidence.',
-        'Connect, communicate and build successful campaigns.', Icons.handshake),
+      'Connect, communicate and build successful campaigns.', Icons.handshake, true),
   ];
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -70,9 +103,12 @@ class _OnboardingPageState extends State<OnboardingPage> {
                       children: [
                     for (final s in slides)
                       Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        ShaderMask(
-                            shaderCallback: (r) => Brand.gradient.createShader(r),
-                            child: Icon(s.$3, size: 120, color: Colors.white)),
+                        s.$4
+                            ? const CollavoLogo(size: 120)
+                            : ShaderMask(
+                                shaderCallback: (r) =>
+                                    Brand.gradient.createShader(r),
+                                child: Icon(s.$3, size: 120, color: Colors.white)),
                         const SizedBox(height: 24),
                         Text(s.$1,
                             style: const TextStyle(
@@ -167,6 +203,18 @@ class _AuthPageState extends State<AuthPage> {
     }
   }
 
+  Future<void> continueWithGoogle() async {
+    setState(() { busy = true; error = null; });
+    try {
+      await auth.signInWithGoogle();
+      if (mounted) _go(context, const Shell());
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
         body: SafeArea(
@@ -203,6 +251,22 @@ class _AuthPageState extends State<AuthPage> {
                           height: 20, width: 20,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : Text(signup ? 'Sign up' : 'Log in')),
+              const SizedBox(height: 8),
+              Row(children: [
+                const Expanded(child: Divider()),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text('OR',
+                      style: Theme.of(context).textTheme.labelMedium),
+                ),
+                const Expanded(child: Divider()),
+              ]),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: busy ? null : continueWithGoogle,
+                icon: const Icon(Icons.g_mobiledata, size: 28),
+                label: const Text('Continue with Google'),
+              ),
               TextButton(
                   onPressed: () => setState(() => signup = !signup),
                   child: Text(signup

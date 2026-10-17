@@ -1,0 +1,31 @@
+{
+	"firestore": {
+		"rules": "firestore.rules"
+	},
+	"hosting": {
+		"public": "build/web",
+		"ignore": [
+			"firebase.json",
+			"**/.*",
+			"**/node_modules/**"
+		],
+		"rewrites": [
+			{
+				"source": "**",
+				"destination": "/index.html"
+			}
+		]
+	},
+	"flutter": {
+		"platforms": {
+			"dart": {
+				"lib/firebase_options.dart": {
+					"projectId": "kollab-6342d",
+					"configurations": {
+						"web": "1:86970307254:web:6c694614425ce714c68c17"
+					}
+				}
+			}
+		}
+	}
+}

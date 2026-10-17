@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../core/brand.dart';
 import '../main.dart';
 import 'creator.dart';
 import 'discover.dart';
+import 'flow.dart';
+import 'messaging.dart';
+import 'profile.dart';
 
 class Shell extends StatefulWidget {
   const Shell({super.key});
@@ -15,11 +20,19 @@ class _ShellState extends State<Shell> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      HomePage(onSearch: () => setState(() => i = 1)),
+      HomePage(
+        onSearch: () => setState(() => i = 1),
+        onProfile: () => setState(() => i = 4),
+      ),
       const DiscoverPage(),
       const _Soon('Campaigns', Icons.campaign_outlined),
-      const _Soon('Messages', Icons.chat_bubble_outline),
-      const _Soon('Profile', Icons.person_outline),
+      InboxPage(
+        onSettings: () => _showSettingsDialog(context),
+        onProfile: () => setState(() => i = 4),
+      ),
+      role.value == Role.creator
+          ? const CreatorProfileEditorPage()
+          : const _AccountPage(),
     ];
     return Scaffold(
       body: pages[i],
@@ -28,25 +41,83 @@ class _ShellState extends State<Shell> {
         onDestinationSelected: (v) => setState(() => i = v),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
-          NavigationDestination(icon: Icon(Icons.explore_outlined), label: 'Discover'),
-          NavigationDestination(icon: Icon(Icons.campaign_outlined), label: 'Campaigns'),
-          NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Messages'),
-          NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
+          NavigationDestination(
+              icon: Icon(Icons.explore_outlined), label: 'Discover'),
+          NavigationDestination(
+              icon: Icon(Icons.campaign_outlined), label: 'Campaigns'),
+          NavigationDestination(
+            icon: _UnreadMessageBadge(),
+            selectedIcon: _UnreadMessageBadge(selected: true),
+            label: 'Messages',
+          ),
+          NavigationDestination(
+              icon: Icon(Icons.person_outline), label: 'Profile'),
         ],
       ),
     );
   }
 }
 
+class _UnreadMessageBadge extends StatelessWidget {
+  const _UnreadMessageBadge({this.selected = false});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final user = useFirebase ? FirebaseAuth.instance.currentUser : null;
+    final icon = Icon(
+      selected ? Icons.chat_bubble : Icons.chat_bubble_outline,
+    );
+    if (user == null) return icon;
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('conversations')
+          .where('participantIds', arrayContains: user.uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        var count = 0;
+        for (final conversation in snapshot.data?.docs ?? const []) {
+          final unread = conversation.data()['unreadCounts'];
+          if (unread is Map) count += (unread[user.uid] as num?)?.toInt() ?? 0;
+        }
+        return Badge(
+          isLabelVisible: count > 0,
+          label: Text(count > 99 ? '99+' : '$count'),
+          child: icon,
+        );
+      },
+    );
+  }
+}
+
 class HomePage extends StatelessWidget {
   final VoidCallback onSearch;
-  const HomePage({super.key, required this.onSearch});
+  final VoidCallback onProfile;
+  const HomePage({super.key, required this.onSearch, required this.onProfile});
   @override
   Widget build(BuildContext context) {
     final isCreator = role.value == Role.creator;
     return SafeArea(
       child: ListView(padding: const EdgeInsets.all(20), children: [
-        const Align(alignment: Alignment.centerLeft, child: CollavoLogo(size: 40)),
+        Row(
+          children: [
+            const CollavoLogo(size: 40),
+            const Spacer(),
+            PopupMenuButton<String>(
+              tooltip: 'Open menu',
+              icon: const Icon(Icons.menu),
+              onSelected: (value) {
+                if (value == 'profile') onProfile();
+                if (value == 'settings') _showSettingsDialog(context);
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'settings', child: Text('Settings')),
+                PopupMenuItem(value: 'profile', child: Text('Profile')),
+              ],
+            ),
+          ],
+        ),
         const SizedBox(height: 16),
         if (isCreator) ...[
           const Text('Good morning 👋',
@@ -55,7 +126,10 @@ class HomePage extends StatelessWidget {
           const Text('80% Complete'),
           const LinearProgressIndicator(value: .8, minHeight: 8),
           const SizedBox(height: 8),
-          FilledButton(onPressed: () {}, child: const Text('Complete Profile')),
+          FilledButton(
+            onPressed: onProfile,
+            child: const Text('Complete Profile'),
+          ),
         ] else ...[
           const Text('Find the right creator.',
               style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
@@ -80,6 +154,87 @@ class HomePage extends StatelessWidget {
             _PreviousCollabTile(collab: collab),
         ],
       ]),
+    );
+  }
+}
+
+void _showSettingsDialog(BuildContext context) {
+  showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Settings'),
+      content: ValueListenableBuilder<ThemeMode>(
+        valueListenable: appThemeMode,
+        builder: (context, mode, child) => SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Dark mode'),
+          secondary: const Icon(Icons.dark_mode_outlined),
+          value: mode == ThemeMode.dark,
+          onChanged: (enabled) =>
+              appThemeMode.value = enabled ? ThemeMode.dark : ThemeMode.light,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _AccountPage extends StatelessWidget {
+  const _AccountPage();
+
+  Future<void> _signOut(BuildContext context) async {
+    if (useFirebase) await FirebaseAuth.instance.signOut();
+    role.value = null;
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => const OnboardingPage()),
+      (_) => false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = useFirebase ? FirebaseAuth.instance.currentUser : null;
+    final name = user?.displayName?.trim().isNotEmpty == true
+        ? user!.displayName!.trim()
+        : user?.email?.split('@').first ?? 'Your account';
+    return Scaffold(
+      appBar: AppBar(title: const Text('Profile')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          CircleAvatar(
+            radius: 38,
+            child: Text(name.isEmpty ? '?' : name[0].toUpperCase(),
+                style: const TextStyle(fontSize: 24)),
+          ),
+          const SizedBox(height: 12),
+          Center(
+              child: Text(name, style: Theme.of(context).textTheme.titleLarge)),
+          if (user?.email != null)
+            Center(
+                child: Text(user!.email!,
+                    style: Theme.of(context).textTheme.bodyMedium)),
+          const SizedBox(height: 28),
+          ListTile(
+            leading: const Icon(Icons.settings_outlined),
+            title: const Text('Settings'),
+            subtitle: const Text('Theme and appearance'),
+            onTap: () => _showSettingsDialog(context),
+          ),
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+            onPressed: () => _signOut(context),
+            icon: const Icon(Icons.logout),
+            label: const Text('Log out'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -159,7 +314,7 @@ class _Soon extends StatelessWidget {
   const _Soon(this.t, this.ic);
   @override
   Widget build(BuildContext context) => Center(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
         Icon(ic, size: 48, color: Brand.purple),
         const SizedBox(height: 8),
         Text('$t is coming next'),

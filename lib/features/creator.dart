@@ -1,12 +1,15 @@
 class Creator {
   final String id, name, username, city, availability;
+  final String? photoData;
+  final bool isSample;
   final List<String> niches, types;
   final int followers, price;
   final bool verified;
   final double rating;
   const Creator(this.id, this.name, this.username, this.city, this.niches,
       this.types, this.followers, this.price, this.verified, this.rating,
-      this.availability);
+      this.availability,
+      {this.photoData, this.isSample = true});
 }
 
 class Requirement {
